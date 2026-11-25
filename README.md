@@ -1,6 +1,6 @@
 # Passkey Lab
 
-A small mobile-first WebAuthn test application for Cloudflare Workers and D1. It contains an initial database wizard, first-admin setup, optional passkey registration and login, password fallback, session management, passkey settings, and an intentionally blank authenticated dashboard.
+A small mobile-first authentication test application for Cloudflare Workers and D1. It contains an initial database wizard, first-admin setup, Google sign-in, optional passkey registration and login, password fallback, session management, security settings, and an intentionally blank authenticated dashboard.
 
 ## Architecture
 
@@ -8,6 +8,7 @@ A small mobile-first WebAuthn test application for Cloudflare Workers and D1. It
 - Hono API running on Cloudflare Workers
 - Cloudflare D1 database
 - `@simplewebauthn` for WebAuthn ceremony generation and verification
+- Google OpenID Connect using Authorization Code with PKCE
 - Same-origin frontend and API
 
 The D1 resource and its Worker binding must exist before the app starts. The application wizard creates the tables inside an empty D1 database.
@@ -76,6 +77,41 @@ npm run deploy
 
 Open the deployment URL and complete the wizard. No manual SQL migration is required for the first installation.
 
+## Google sign-in
+
+Google sign-in is optional. The Google button stays hidden until both Worker values below are configured.
+
+### 1. Create a Google OAuth client
+
+In Google Cloud Console, create an OAuth 2.0 client with application type **Web application**. Add this exact authorized redirect URI for the default Worker hostname:
+
+```text
+https://testwebauth.coder-camera.workers.dev/api/auth/google/callback
+```
+
+If you use a custom domain, add its equivalent callback URI as well, for example `https://passkeys.example.com/api/auth/google/callback`. The URI must exactly match the hostname used to open the application.
+
+### 2. Add Cloudflare variables and secrets
+
+Under **Workers & Pages → testwebauth → Settings → Variables and Secrets**, add:
+
+| Type | Name | Value |
+| --- | --- | --- |
+| Text | `GOOGLE_CLIENT_ID` | The OAuth web client ID from Google |
+| Secret | `GOOGLE_CLIENT_SECRET` | The OAuth web client secret from Google |
+
+Deploy the variable changes. The CLI alternatives are:
+
+```sh
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+```
+
+Add `GOOGLE_CLIENT_ID` as a Worker text variable in the Cloudflare dashboard. For local development, place both values in `.dev.vars`.
+
+Google sign-in does not create new application users. On first use, the verified Google email must match an existing application account; the application then stores Google's stable account ID for future sign-ins. A signed-in user can also connect or disconnect Google under **Security**. Google cannot be disconnected if it is the user's only sign-in method.
+
+Existing installations are upgraded automatically when the application starts; no manual D1 migration is required.
+
 ## Local development
 
 ```sh
@@ -102,6 +138,7 @@ npx wrangler deploy --dry-run --outdir .worker-dist
 - Session cookies are `HttpOnly`, `Secure`, `SameSite=Lax`, and contain random opaque tokens.
 - Only hashed session tokens are stored in D1.
 - Cross-origin state-changing API requests are rejected.
+- Google sign-in validates OAuth state, PKCE, nonce, the ID-token signature, issuer, audience, and verified email; Google access and refresh tokens are not stored.
 - The final passkey cannot be removed until another passkey has been registered.
 
 This is intentionally a focused authentication test bed. Before using it for production accounts, add rate limiting, verified recovery, email ownership verification, operational monitoring, and a formal security review.
