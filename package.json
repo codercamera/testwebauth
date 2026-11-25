@@ -1,0 +1,27 @@
+{
+  "name": "testwebauth",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build",
+    "dev": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@simplewebauthn/browser": "14.0.0",
+    "@simplewebauthn/server": "14.1.0",
+    "hono": "4.13.22",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261125.1",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.8",
+    "wrangler": "4.168.0"
+  }
+}
