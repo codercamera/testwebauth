@@ -29,6 +29,16 @@ type Passkey = {
   createdAt: string;
   lastUsedAt: string | null;
 };
+type GoogleConnection = {
+  configured: boolean;
+  account: {
+    email: string;
+    displayName: string | null;
+    pictureUrl: string | null;
+    connectedAt: string;
+    lastLoginAt: string | null;
+  } | null;
+};
 
 type Screen =
   | { type: 'loading' }
@@ -66,6 +76,14 @@ function App() {
   }, []);
 
   useEffect(() => { void boot(); }, [boot]);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const message = params.get('oauth') ?? params.get('oauth_error');
+    if (message) {
+      setNotice(message);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
 
   return (
     <div className="app-shell">
@@ -239,6 +257,13 @@ function LoginScreen({ appName, onSuccess, onError }: {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+  const [googleAvailable, setGoogleAvailable] = useState(false);
+
+  useEffect(() => {
+    void api<{ google: boolean }>('/api/auth/providers')
+      .then((providers) => setGoogleAvailable(providers.google))
+      .catch(() => setGoogleAvailable(false));
+  }, []);
 
   async function login(event: FormEvent) {
     event.preventDefault();
@@ -271,12 +296,20 @@ function LoginScreen({ appName, onSuccess, onError }: {
         <p>Secure sign-in without sharing a secret.</p>
       </div>
       <form className="card login-card" onSubmit={login}>
+        <h1>Welcome back</h1>
+        <p className="lead">Choose how you want to sign in.</p>
+        {googleAvailable && (
+          <>
+            <button className="button google-button full" type="button" onClick={() => window.location.assign('/api/auth/google/start')}>
+              <GoogleIcon /> Continue with Google
+            </button>
+            <div className="auth-divider"><span>or</span></div>
+          </>
+        )}
         <div className="mode-tabs">
           <button type="button" className={mode === 'passkey' ? 'active' : ''} onClick={() => setMode('passkey')}>Passkey</button>
           <button type="button" className={mode === 'password' ? 'active' : ''} onClick={() => setMode('password')}>Password</button>
         </div>
-        <h1>Welcome back</h1>
-        <p className="lead">Enter your email to continue.</p>
         <Field label="Email">
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="username webauthn" />
         </Field>
@@ -338,12 +371,20 @@ function SecuritySettings({ user, onNotice, onLogout }: {
   onLogout: () => void;
 }) {
   const [passkeys, setPasskeys] = useState<Passkey[]>([]);
+  const [google, setGoogle] = useState<GoogleConnection>({ configured: false, account: null });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { setPasskeys((await api<{ passkeys: Passkey[] }>('/api/auth/passkeys')).passkeys); }
+    try {
+      const [passkeyResponse, googleResponse] = await Promise.all([
+        api<{ passkeys: Passkey[] }>('/api/auth/passkeys'),
+        api<GoogleConnection>('/api/auth/google/account'),
+      ]);
+      setPasskeys(passkeyResponse.passkeys);
+      setGoogle(googleResponse);
+    }
     catch (error) { onNotice(errorMessage(error)); }
     finally { setLoading(false); }
   }, [onNotice]);
@@ -384,10 +425,41 @@ function SecuritySettings({ user, onNotice, onLogout }: {
     } catch (error) { onNotice(errorMessage(error)); }
   }
 
+  function connectGoogle() {
+    window.location.assign('/api/auth/google/start?mode=link');
+  }
+
+  async function disconnectGoogle() {
+    if (!window.confirm('Disconnect this Google account? Password and passkey sign-in will remain available.')) return;
+    try {
+      await api('/api/auth/google/account', { method: 'DELETE' });
+      onNotice('Google account disconnected.');
+      await load();
+    } catch (error) { onNotice(errorMessage(error)); }
+  }
+
   return (
     <section className="settings-page">
       <div><p className="eyebrow">Account</p><h1>Security</h1><p className="lead">Manage how you sign in to this application.</p></div>
       <div className="profile-card"><Avatar name={user.displayName} /><div><strong>{user.displayName}</strong><span>{user.email}</span></div><span className="role-badge">{user.role}</span></div>
+      <section className="settings-section">
+        <div className="section-heading">
+          <div><h2>Google account</h2><p>{google.account ? `Connected as ${google.account.email}` : 'Use Google as an additional sign-in method.'}</p></div>
+          {google.configured && (google.account ? (
+            <button className="button secondary small" onClick={disconnectGoogle}>Disconnect</button>
+          ) : (
+            <button className="button secondary small" onClick={connectGoogle}><GoogleIcon /> Connect</button>
+          ))}
+        </div>
+        {!google.configured && <div className="list-placeholder">Google OAuth is not configured on this Worker.</div>}
+        {google.account && (
+          <div className="provider-account">
+            {google.account.pictureUrl ? <img src={google.account.pictureUrl} alt="" referrerPolicy="no-referrer" /> : <GoogleIcon />}
+            <div><strong>{google.account.displayName || user.displayName}</strong><span>{google.account.email}</span></div>
+            <span className="enabled-badge">Connected</span>
+          </div>
+        )}
+      </section>
       <section className="settings-section">
         <div className="section-heading"><div><h2>Passkeys</h2><p>Use your devices to sign in securely.</p></div><button className="button secondary small" onClick={addPasskey} disabled={busy}><Icon name="plus" /> Add</button></div>
         {loading ? <div className="list-placeholder">Loading passkeys…</div> : passkeys.length === 0 ? (
@@ -447,6 +519,16 @@ function CheckRow({ done, children }: { done: boolean; children: ReactNode }) {
 
 function StepBadge({ icon }: { icon: IconName }) { return <div className="step-badge"><Icon name={icon} /></div>; }
 function Avatar({ name }: { name: string }) { return <span className="avatar">{name.trim().charAt(0).toUpperCase() || '?'}</span>; }
+function GoogleIcon() {
+  return (
+    <svg className="google-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path fill="#4285F4" d="M21.6 12.23c0-.71-.06-1.4-.18-2.07H12v3.92h5.38a4.6 4.6 0 0 1-2 3.02v2.54h3.24c1.9-1.75 2.98-4.33 2.98-7.41Z"/>
+      <path fill="#34A853" d="M12 22c2.7 0 4.97-.9 6.63-2.43l-3.24-2.54c-.9.6-2.05.96-3.39.96-2.61 0-4.82-1.76-5.61-4.13H3.04v2.62A10 10 0 0 0 12 22Z"/>
+      <path fill="#FBBC05" d="M6.39 13.86A6 6 0 0 1 6.08 12c0-.65.11-1.28.31-1.86V7.52H3.04A10 10 0 0 0 2 12c0 1.61.39 3.14 1.04 4.48l3.35-2.62Z"/>
+      <path fill="#EA4335" d="M12 6.01c1.47 0 2.79.5 3.82 1.5l2.87-2.87A9.63 9.63 0 0 0 12 2 10 10 0 0 0 3.04 7.52l3.35 2.62C7.18 7.77 9.39 6.01 12 6.01Z"/>
+    </svg>
+  );
+}
 function Toast({ message, onClose }: { message: string; onClose: () => void }) {
   useEffect(() => { const timer = window.setTimeout(onClose, 5000); return () => window.clearTimeout(timer); }, [onClose]);
   return <div className="toast" role="status"><span>{message}</span><button onClick={onClose} aria-label="Close">×</button></div>;
