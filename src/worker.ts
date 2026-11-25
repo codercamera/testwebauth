@@ -207,7 +207,7 @@ app.post('/api/setup/initialize', async (c) => {
     db.prepare('INSERT INTO app_meta (key, value) VALUES (?, ?)').bind('app_name', appName),
     db.prepare('INSERT INTO app_meta (key, value) VALUES (?, ?)').bind('rp_id', rpId),
     db.prepare('INSERT INTO app_meta (key, value) VALUES (?, ?)').bind('origin', origin),
-    db.prepare('INSERT INTO app_meta (key, value) VALUES (?, ?)').bind('installation_complete', '0'),
+    db.prepare('INSERT INTO app_meta (key, value) VALUES (?, ?)').bind('installation_complete', '1'),
     db.prepare('INSERT INTO app_meta (key, value) VALUES (?, ?)').bind('password_enabled', '1'),
     db.prepare(
       `INSERT INTO users (id, email, display_name, role, password_hash)
@@ -216,8 +216,32 @@ app.post('/api/setup/initialize', async (c) => {
   );
   await db.batch(statements);
   await recordEvent(c, db, userId, 'setup_initialized', true);
+  const token = await createSession(db, userId);
+  writeSessionCookie(c, token);
 
   return c.json({ ok: true, userId });
+});
+
+app.post('/api/setup/complete', async (c) => {
+  const db = requireDatabase(c.env.DB);
+  const body = await readJson<{ setupKey?: string }>(c);
+  await assertSetupKey(c.env.SETUP_KEY, body.setupKey);
+  const config = await readConfig(db);
+  if (config.installationComplete) return c.json({ error: 'Setup is already complete.' }, 409);
+
+  const user = await db.prepare(
+    `SELECT id, email, display_name, role, password_hash, created_at
+     FROM users WHERE role = 'admin' ORDER BY created_at LIMIT 1`,
+  ).first<UserRow>();
+  if (!user) return c.json({ error: 'Initial administrator not found.' }, 409);
+
+  await db.prepare(
+    `UPDATE app_meta SET value = '1', updated_at = CURRENT_TIMESTAMP WHERE key = 'installation_complete'`,
+  ).run();
+  await recordEvent(c, db, user.id, 'setup_completed_without_passkey', true);
+  const token = await createSession(db, user.id);
+  writeSessionCookie(c, token);
+  return c.json({ ok: true });
 });
 
 app.post('/api/setup/passkey/options', async (c) => {
@@ -567,7 +591,7 @@ function validateOrigin(value: string | undefined, rpId: string): string {
 
 async function hashPassword(password: string): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  const iterations = 210_000;
+  const iterations = 100_000;
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits(
     { name: 'PBKDF2', hash: 'SHA-256', salt, iterations },
