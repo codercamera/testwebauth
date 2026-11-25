@@ -18,10 +18,10 @@ The D1 resource and its Worker binding must exist before the app starts. The app
 2. If the binding exists but has no application schema, the setup wizard opens.
 3. The operator enters the Worker `SETUP_KEY`, application identity, RP ID, origin, and first administrator.
 4. The Worker creates all tables and the administrator in one D1 batch.
-5. The administrator registers and verifies the first passkey.
-6. Only after successful passkey verification is the installation marked complete and setup locked.
+5. Setup is marked complete and the administrator is signed in with a secure session.
+6. Passkey registration is optional and available later under **Security → Passkeys**.
 
-If setup is interrupted after table creation, reopening the application resumes at first-passkey registration.
+If a database was created by an older version that stopped at mandatory passkey registration, the wizard offers a protected “Finish without passkey” recovery step.
 
 ## Cloudflare preparation
 
