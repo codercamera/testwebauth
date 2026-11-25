@@ -55,6 +55,9 @@ h2 { letter-spacing: -.025em; }
 .button.primary { color: white; background: linear-gradient(135deg, #5e55ed, #4439cb); box-shadow: 0 10px 24px rgba(79,70,229,.22); }
 .button.primary:hover { box-shadow: 0 13px 29px rgba(79,70,229,.3); }
 .button.secondary { color: var(--primary-dark); background: var(--primary-soft); }
+.button.google-button { color: #20243a; background: white; border: 1px solid #d5dae5; box-shadow: 0 4px 12px rgba(30,38,65,.06); margin: 1.25rem 0 0; }
+.button.google-button:hover { border-color: #b8c0d0; background: #fbfcff; }
+.google-icon { width: 1.25rem; height: 1.25rem; flex: 0 0 auto; }
 .button.small { min-height: 2.35rem; padding: .45rem .75rem; border-radius: .72rem; font-size: .82rem; }
 .button.danger-text { color: var(--danger); background: #fff; border: 1px solid #f0d9dc; }
 .full { width: 100%; }
@@ -79,6 +82,8 @@ h2 { letter-spacing: -.025em; }
 .mode-tabs { display: grid; grid-template-columns: 1fr 1fr; background: #f0f2f7; padding: .25rem; border-radius: .85rem; margin-bottom: 1.4rem; }
 .mode-tabs button { border: 0; background: transparent; padding: .65rem; border-radius: .65rem; color: var(--muted); font-size: .83rem; font-weight: 800; }
 .mode-tabs button.active { color: #292f44; background: white; box-shadow: 0 3px 10px rgba(27,36,59,.08); }
+.auth-divider { display: flex; align-items: center; gap: .75rem; color: #8a93a5; font-size: .78rem; margin: 1rem 0; }
+.auth-divider::before, .auth-divider::after { content: ''; height: 1px; flex: 1; background: var(--border); }
 .authenticated-shell { min-height: 100vh; min-height: 100dvh; padding-bottom: calc(5rem + env(safe-area-inset-bottom)); }
 .topbar { height: calc(4.5rem + env(safe-area-inset-top)); padding: env(safe-area-inset-top) max(1rem, env(safe-area-inset-right)) 0 max(1rem, env(safe-area-inset-left)); display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,.82); border-bottom: 1px solid rgba(226,231,240,.85); backdrop-filter: blur(15px); position: sticky; top: 0; z-index: 10; }
 .avatar-button { background: none; border: 0; padding: .2rem; border-radius: .9rem; }
@@ -106,6 +111,12 @@ h2 { letter-spacing: -.025em; }
 .section-heading h2 { font-size: 1rem; margin: 0 0 .25rem; }
 .section-heading p { color: var(--muted); font-size: .76rem; margin: 0; }
 .enabled-badge { color: #137451; background: #eafaf2; border-radius: 999px; padding: .35rem .6rem; font-size: .68rem; font-weight: 800; }
+.provider-account { display: flex; align-items: center; gap: .75rem; border-top: 1px solid #edf0f5; margin-top: .9rem; padding-top: .9rem; }
+.provider-account > img, .provider-account > svg { width: 2.5rem; height: 2.5rem; border-radius: .8rem; flex: 0 0 auto; }
+.provider-account > svg { padding: .45rem; background: #f6f8fc; }
+.provider-account > div { display: grid; min-width: 0; flex: 1; }
+.provider-account strong { font-size: .82rem; overflow: hidden; text-overflow: ellipsis; }
+.provider-account div span { color: var(--muted); font-size: .7rem; overflow: hidden; text-overflow: ellipsis; }
 .passkey-row { display: flex; align-items: center; gap: .75rem; border-top: 1px solid #edf0f5; padding: .95rem 0 0; margin-top: .95rem; }
 .passkey-symbol { width: 2.5rem; height: 2.5rem; flex: 0 0 auto; display: grid; place-items: center; border-radius: .8rem; color: var(--primary); background: var(--primary-soft); }
 .passkey-symbol svg { width: 1.3rem; }
