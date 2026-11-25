@@ -108,7 +108,7 @@ npx wrangler secret put GOOGLE_CLIENT_SECRET
 
 Add `GOOGLE_CLIENT_ID` as a Worker text variable in the Cloudflare dashboard. For local development, place both values in `.dev.vars`.
 
-Google sign-in does not create new application users. On first use, the verified Google email must match an existing application account; the application then stores Google's stable account ID for future sign-ins. A signed-in user can also connect or disconnect Google under **Security**. Google cannot be disconnected if it is the user's only sign-in method.
+**Continue with Google** signs in an existing account and stores Google's stable account ID on first use. **Sign up with Google** creates a new application account with the `user` role from Google's verified email and profile name, then signs the user in. The setup administrator remains the only automatically created `admin`. A signed-in user can connect or disconnect Google under **Security**. Google cannot be disconnected if it is the user's only sign-in method.
 
 Existing installations are upgraded automatically when the application starts; no manual D1 migration is required.
 
