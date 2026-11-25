@@ -75,7 +75,7 @@ function App() {
       {screen.type === 'setup' && (
         <SetupWizard
           status={screen.status}
-          onComplete={() => { setNotice('Setup complete. Your first passkey is ready.'); void boot(); }}
+          onComplete={() => { setNotice('Setup complete. You can add a passkey from Security settings.'); void boot(); }}
           onError={(message) => setNotice(message)}
         />
       )}
@@ -119,7 +119,7 @@ function DatabaseMissing({ status, onRetry }: { status: SetupStatus; onRetry: ()
         <p className="lead">The application needs a Cloudflare D1 binding named <code>DB</code> before it can create its tables.</p>
         <div className="check-list">
           <CheckRow done={false}>Create a D1 database in Cloudflare</CheckRow>
-          <CheckRow done={false}>Add its ID to <code>wrangler.jsonc</code></CheckRow>
+          <CheckRow done={false}>Attach the D1 binding as <code>DB</code></CheckRow>
           <CheckRow done={status.setupKeyConfigured}>Configure the <code>SETUP_KEY</code> Worker secret</CheckRow>
           <CheckRow done={false}>Deploy the Worker again</CheckRow>
         </div>
@@ -135,10 +135,8 @@ function SetupWizard({ status, onComplete, onError }: {
   onComplete: () => void;
   onError: (message: string) => void;
 }) {
-  const [step, setStep] = useState(status.state === 'awaiting_passkey' ? 2 : 1);
   const [busy, setBusy] = useState(false);
   const [setupKey, setSetupKey] = useState('');
-  const [passkeyName, setPasskeyName] = useState('This device');
   const [form, setForm] = useState({
     appName: 'Passkey Lab',
     adminName: '',
@@ -153,7 +151,7 @@ function SetupWizard({ status, onComplete, onError }: {
     setBusy(true);
     try {
       await api('/api/setup/initialize', { method: 'POST', body: { ...form, setupKey } });
-      setStep(2);
+      onComplete();
     } catch (error) {
       onError(errorMessage(error));
     } finally {
@@ -161,21 +159,13 @@ function SetupWizard({ status, onComplete, onError }: {
     }
   }
 
-  async function registerInitialPasskey() {
+  async function completePreviousSetup() {
     setBusy(true);
     try {
-      const challenge = await api<RegistrationChallenge>('/api/setup/passkey/options', {
-        method: 'POST', body: { setupKey },
-      });
-      const response = await startRegistration({ optionsJSON: challenge.options });
-      await api('/api/setup/passkey/verify', {
-        method: 'POST',
-        body: { setupKey, challengeId: challenge.challengeId, response, passkeyName },
-      });
+      await api('/api/setup/complete', { method: 'POST', body: { setupKey } });
       onComplete();
     } catch (error) {
-      if (isUserCancelled(error)) onError('Passkey creation was cancelled. You can try again.');
-      else onError(errorMessage(error));
+      onError(errorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -184,14 +174,11 @@ function SetupWizard({ status, onComplete, onError }: {
   return (
     <main className="center-page page-padding">
       <Brand />
-      <div className="wizard-progress" aria-label={`Setup step ${step} of 2`}>
-        <span className="active" /><span className={step === 2 ? 'active' : ''} />
-      </div>
-      {step === 1 ? (
+      {status.state === 'empty' ? (
         <form className="card setup-card" onSubmit={initialize}>
-          <p className="eyebrow">Step 1 of 2</p>
+          <p className="eyebrow">Initial setup</p>
           <h1>Initialize your app</h1>
-          <p className="lead">Create the database tables and the first administrator.</p>
+          <p className="lead">Create the database tables and the first administrator. You can add a passkey later from Security settings.</p>
           {!status.setupKeyConfigured && <div className="inline-warning">Configure <code>SETUP_KEY</code> before continuing.</div>}
           <Field label="Setup key">
             <input type="password" value={setupKey} onChange={(e) => setSetupKey(e.target.value)} required autoComplete="off" />
@@ -221,25 +208,21 @@ function SetupWizard({ status, onComplete, onError }: {
         </form>
       ) : (
         <section className="card setup-card">
-          <StepBadge icon="passkey" />
-          <p className="eyebrow">Step 2 of 2</p>
-          <h1>Create your first passkey</h1>
-          <p className="lead">Use your fingerprint, face, device PIN or a security key. Setup is locked after this passkey is verified.</p>
+          <StepBadge icon="shield" />
+          <p className="eyebrow">Setup update</p>
+          <h1>Finish setup</h1>
+          <p className="lead">This installation was created by an earlier version that required a passkey. You can now finish setup without registering one.</p>
           {status.admin && (
             <div className="identity-chip">
               <Avatar name={status.admin.display_name} />
               <div><strong>{status.admin.display_name}</strong><span>{status.admin.email}</span></div>
             </div>
           )}
-          <Field label="Passkey name" hint="So you can recognize it later">
-            <input value={passkeyName} onChange={(e) => setPasskeyName(e.target.value)} maxLength={60} />
-          </Field>
           <Field label="Setup key">
             <input type="password" value={setupKey} onChange={(e) => setSetupKey(e.target.value)} required autoComplete="off" />
           </Field>
-          <div className="privacy-note"><Icon name="shield" /><span>Your biometric data stays on your device. This app stores only the public credential.</span></div>
-          <button className="button primary full" onClick={registerInitialPasskey} disabled={busy || !setupKey}>
-            <Icon name="fingerprint" /> {busy ? 'Waiting for your device…' : 'Create passkey'}
+          <button className="button primary full" onClick={completePreviousSetup} disabled={busy || !setupKey}>
+            {busy ? 'Finishing setup…' : 'Finish without passkey'}
           </button>
         </section>
       )}
@@ -252,7 +235,7 @@ function LoginScreen({ appName, onSuccess, onError }: {
   onSuccess: () => void;
   onError: (message: string) => void;
 }) {
-  const [mode, setMode] = useState<'passkey' | 'password'>('passkey');
+  const [mode, setMode] = useState<'passkey' | 'password'>('password');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -407,7 +390,9 @@ function SecuritySettings({ user, onNotice, onLogout }: {
       <div className="profile-card"><Avatar name={user.displayName} /><div><strong>{user.displayName}</strong><span>{user.email}</span></div><span className="role-badge">{user.role}</span></div>
       <section className="settings-section">
         <div className="section-heading"><div><h2>Passkeys</h2><p>Use your devices to sign in securely.</p></div><button className="button secondary small" onClick={addPasskey} disabled={busy}><Icon name="plus" /> Add</button></div>
-        {loading ? <div className="list-placeholder">Loading passkeys…</div> : passkeys.map((passkey) => (
+        {loading ? <div className="list-placeholder">Loading passkeys…</div> : passkeys.length === 0 ? (
+          <div className="list-placeholder">No passkeys registered yet. Select Add to test WebAuthn on this device.</div>
+        ) : passkeys.map((passkey) => (
           <article className="passkey-row" key={passkey.id}>
             <div className="passkey-symbol"><Icon name="passkey" /></div>
             <div className="passkey-info"><strong>{passkey.name}</strong><span>{passkey.backedUp ? 'Synced passkey' : 'Device passkey'} · Added {formatDate(passkey.createdAt)}</span>{passkey.lastUsedAt && <small>Last used {formatDate(passkey.lastUsedAt)}</small>}</div>
