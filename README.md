@@ -39,17 +39,27 @@ npx wrangler d1 create testwebauth
 
 Copy the returned database ID into `wrangler.jsonc`, replacing `REPLACE_WITH_YOUR_D1_DATABASE_ID`.
 
-### 3. Create the setup secret
+### 3. Create the setup secret in Cloudflare
 
-Generate a long random value and save it as a Worker secret:
+After the first deployment, open the Cloudflare dashboard:
+
+1. Go to **Workers & Pages** and select **testwebauth**.
+2. Open **Settings**.
+3. Open **Variables and Secrets**.
+4. Select **Add**.
+5. Set the name to `SETUP_KEY`.
+6. Choose **Secret** (encrypted), not plain-text variable.
+7. Enter a long random value and save/deploy the change.
+
+The browser setup wizard asks for this same value. It prevents the first public visitor from claiming the administrator account. Never add the real value to GitHub, `wrangler.jsonc`, or frontend code.
+
+The CLI alternative is:
 
 ```sh
 npx wrangler secret put SETUP_KEY
 ```
 
-The browser setup wizard requires this value. It prevents the first public visitor from claiming the administrator account.
-
-For local development, copy `.dev.vars.example` to `.dev.vars` and replace its values. `.dev.vars` is ignored by Git.
+For local development, copy `.dev.vars.example` to `.dev.vars` and replace its value. `.dev.vars` is ignored by Git.
 
 ### 4. Choose the hostname before registering passkeys
 
