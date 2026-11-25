@@ -434,6 +434,7 @@ app.get('/api/auth/google/callback', async (c) => {
     return c.redirect(oauthResultUrl(c.req.url, 'oauth_error', 'Google sign-in request expired.'));
   }
 
+  let googleEmail: string | null = null;
   try {
     const oauthState = await consumeOAuthState(db, state, browserToken);
     const redirectUri = googleRedirectUri(c.req.url);
@@ -464,7 +465,7 @@ app.get('/api/auth/google/callback', async (c) => {
       throw new ApiError(401, 'Google did not return a verified email address.');
     }
 
-    const googleEmail = claims.email.toLowerCase();
+    googleEmail = claims.email.toLowerCase();
     let user: UserRow;
     let resultMessage = 'Signed in with Google.';
     if (oauthState.link_user_id) {
@@ -536,6 +537,9 @@ app.get('/api/auth/google/callback', async (c) => {
     return c.redirect(oauthResultUrl(c.req.url, 'oauth', resultMessage));
   } catch (error) {
     clearOAuthCookie(c);
+    if (error instanceof ApiError && error.status === 403 && googleEmail) {
+      return c.redirect(oauthMissingUrl(c.req.url, googleEmail));
+    }
     const message = error instanceof Error ? error.message : 'Google sign-in failed.';
     return c.redirect(oauthResultUrl(c.req.url, 'oauth_error', message));
   }
@@ -811,6 +815,12 @@ function googleRedirectUri(requestUrl: string): string {
 function oauthResultUrl(requestUrl: string, key: 'oauth' | 'oauth_error', message: string): string {
   const url = new URL('/', requestUrl);
   url.searchParams.set(key, message);
+  return url.toString();
+}
+
+function oauthMissingUrl(requestUrl: string, email: string): string {
+  const url = new URL('/', requestUrl);
+  url.searchParams.set('oauth_missing', email);
   return url.toString();
 }
 
