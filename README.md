@@ -1,6 +1,6 @@
 # Passkey Lab
 
-A small mobile-first WebAuthn test application for Cloudflare Workers and D1. It contains an initial database wizard, first-admin setup, passkey registration and login, password fallback, session management, passkey settings, and an intentionally blank authenticated dashboard.
+A small mobile-first WebAuthn test application for Cloudflare Workers and D1. It contains an initial database wizard, first-admin setup, optional passkey registration and login, password fallback, session management, passkey settings, and an intentionally blank authenticated dashboard.
 
 ## Architecture
 
