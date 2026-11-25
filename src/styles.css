@@ -57,6 +57,8 @@ h2 { letter-spacing: -.025em; }
 .button.secondary { color: var(--primary-dark); background: var(--primary-soft); }
 .button.google-button { color: #20243a; background: white; border: 1px solid #d5dae5; box-shadow: 0 4px 12px rgba(30,38,65,.06); margin: 1.25rem 0 0; }
 .button.google-button:hover { border-color: #b8c0d0; background: #fbfcff; }
+.google-signup-link { width: 100%; border: 0; background: transparent; color: var(--primary-dark); padding: .8rem .5rem 0; font-weight: 800; font-size: .84rem; }
+.google-signup-link:hover { text-decoration: underline; }
 .google-icon { width: 1.25rem; height: 1.25rem; flex: 0 0 auto; }
 .button.small { min-height: 2.35rem; padding: .45rem .75rem; border-radius: .72rem; font-size: .82rem; }
 .button.danger-text { color: var(--danger); background: #fff; border: 1px solid #f0d9dc; }
