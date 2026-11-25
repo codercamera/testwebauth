@@ -98,7 +98,7 @@ npx wrangler deploy --dry-run --outdir .worker-dist
 - WebAuthn challenges expire after five minutes and are single-use.
 - User verification is required for passkey registration and login.
 - The server verifies the expected RP ID and exact origin.
-- Passwords use PBKDF2-SHA-256 with a unique salt and 210,000 iterations.
+- Passwords use PBKDF2-SHA-256 with a unique salt and the Cloudflare Workers maximum of 100,000 iterations.
 - Session cookies are `HttpOnly`, `Secure`, `SameSite=Lax`, and contain random opaque tokens.
 - Only hashed session tokens are stored in D1.
 - Cross-origin state-changing API requests are rejected.
