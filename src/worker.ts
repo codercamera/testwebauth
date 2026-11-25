@@ -71,7 +71,7 @@ type OAuthAccountRow = {
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 const SESSION_COOKIE = 'passkey_lab_session';
 const OAUTH_COOKIE = 'passkey_lab_oauth';
-const SCHEMA_VERSION = '2';
+const SCHEMA_VERSION = '3';
 const CHALLENGE_TTL_MINUTES = 5;
 const SESSION_TTL_DAYS = 7;
 const OAUTH_TTL_MINUTES = 10;
@@ -98,6 +98,7 @@ const oauthSchemaStatements = [
     browser_token_hash TEXT NOT NULL,
     nonce TEXT NOT NULL,
     code_verifier TEXT NOT NULL,
+    flow TEXT NOT NULL DEFAULT 'login',
     link_user_id TEXT,
     expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -362,7 +363,9 @@ app.get('/api/auth/google/start', async (c) => {
   await assertReady(db);
   await ensureOAuthSchema(db);
   const google = requireGoogleConfig(c.env);
-  const linkMode = c.req.query('mode') === 'link';
+  const requestedMode = c.req.query('mode');
+  const flow = requestedMode === 'link' ? 'link' : requestedMode === 'signup' ? 'signup' : 'login';
+  const linkMode = flow === 'link';
   const linkUser = linkMode ? await authenticatedUser(c, db) : null;
   if (linkMode && !linkUser) {
     return c.redirect(oauthResultUrl(c.req.url, 'oauth_error', 'Sign in before connecting Google.'));
@@ -377,13 +380,14 @@ app.get('/api/auth/google/start', async (c) => {
   await db.prepare('DELETE FROM oauth_states WHERE expires_at <= CURRENT_TIMESTAMP').run();
   await db.prepare(
     `INSERT INTO oauth_states
-      (state_hash, browser_token_hash, nonce, code_verifier, link_user_id, expires_at)
-     VALUES (?, ?, ?, ?, ?, datetime('now', ?))`,
+      (state_hash, browser_token_hash, nonce, code_verifier, flow, link_user_id, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, datetime('now', ?))`,
   ).bind(
     await sha256(state),
     await sha256(browserToken),
     nonce,
     codeVerifier,
+    flow,
     linkUser?.id ?? null,
     `+${OAUTH_TTL_MINUTES} minutes`,
   ).run();
@@ -489,10 +493,22 @@ app.get('/api/auth/google/callback', async (c) => {
           `SELECT id, email, display_name, role, password_hash, created_at
            FROM users WHERE email = ?`,
         ).bind(googleEmail).first<UserRow>();
-        if (!existing) {
-          throw new ApiError(403, 'No existing Passkey Lab account matches this Google email.');
+        if (!existing && oauthState.flow !== 'signup') {
+          throw new ApiError(403, 'No existing Passkey Lab account matches this Google email. Use Sign up with Google first.');
         }
-        user = existing;
+        if (existing) {
+          user = existing;
+        } else {
+          const userId = crypto.randomUUID();
+          const displayName = (typeof claims.name === 'string' ? claims.name.trim() : '')
+            .slice(0, 80) || googleEmail.split('@')[0].slice(0, 80);
+          await db.prepare(
+            `INSERT INTO users (id, email, display_name, role, password_hash)
+             VALUES (?, ?, ?, 'user', NULL)`,
+          ).bind(userId, googleEmail, displayName).run();
+          user = await findUserById(db, userId);
+          resultMessage = 'Account created with Google.';
+        }
         await linkGoogleAccount(db, user.id, {
           subject: claims.sub,
           email: googleEmail,
@@ -500,7 +516,14 @@ app.get('/api/auth/google/callback', async (c) => {
           picture: typeof claims.picture === 'string' ? claims.picture : null,
         });
       }
-      await recordEvent(c, db, user.id, 'google_login', true, googleEmail);
+      await recordEvent(
+        c,
+        db,
+        user.id,
+        resultMessage === 'Account created with Google.' ? 'google_signup' : 'google_login',
+        true,
+        googleEmail,
+      );
     }
 
     await db.prepare(
@@ -771,6 +794,10 @@ function requireGoogleConfig(env: Bindings): { clientId: string; clientSecret: s
 
 async function ensureOAuthSchema(db: D1Database): Promise<void> {
   await db.batch(oauthSchemaStatements.map((sql) => db.prepare(sql)));
+  const stateColumns = await db.prepare('PRAGMA table_info(oauth_states)').all<{ name: string }>();
+  if (!stateColumns.results.some((column) => column.name === 'flow')) {
+    await db.prepare("ALTER TABLE oauth_states ADD COLUMN flow TEXT NOT NULL DEFAULT 'login'").run();
+  }
   await db.prepare(
     `UPDATE app_meta SET value = ?, updated_at = CURRENT_TIMESTAMP
      WHERE key = 'schema_version' AND CAST(value AS INTEGER) < ?`,
@@ -799,22 +826,33 @@ async function consumeOAuthState(
   db: D1Database,
   state: string,
   browserToken: string,
-): Promise<{ nonce: string; code_verifier: string; link_user_id: string | null }> {
+): Promise<{
+  nonce: string;
+  code_verifier: string;
+  flow: 'login' | 'signup' | 'link';
+  link_user_id: string | null;
+}> {
   const stateHash = await sha256(state);
   const row = await db.prepare(
-    `SELECT browser_token_hash, nonce, code_verifier, link_user_id
+    `SELECT browser_token_hash, nonce, code_verifier, flow, link_user_id
      FROM oauth_states WHERE state_hash = ? AND expires_at > CURRENT_TIMESTAMP`,
   ).bind(stateHash).first<{
     browser_token_hash: string;
     nonce: string;
     code_verifier: string;
+    flow: string;
     link_user_id: string | null;
   }>();
   await db.prepare('DELETE FROM oauth_states WHERE state_hash = ?').bind(stateHash).run();
   if (!row || !(await safeEqual(row.browser_token_hash, await sha256(browserToken)))) {
     throw new ApiError(401, 'Google sign-in state verification failed or expired.');
   }
-  return row;
+  return {
+    nonce: row.nonce,
+    code_verifier: row.code_verifier,
+    flow: row.flow === 'signup' ? 'signup' : row.flow === 'link' ? 'link' : 'login',
+    link_user_id: row.link_user_id,
+  };
 }
 
 async function linkGoogleAccount(
