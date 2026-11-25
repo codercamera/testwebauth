@@ -348,8 +348,12 @@ app.post('/api/setup/passkey/verify', async (c) => {
 });
 
 app.get('/api/auth/providers', (c) => {
+  const googleClientIdConfigured = Boolean(c.env.GOOGLE_CLIENT_ID);
+  const googleClientSecretConfigured = Boolean(c.env.GOOGLE_CLIENT_SECRET);
   return c.json({
-    google: Boolean(c.env.GOOGLE_CLIENT_ID && c.env.GOOGLE_CLIENT_SECRET),
+    google: googleClientIdConfigured && googleClientSecretConfigured,
+    googleClientIdConfigured,
+    googleClientSecretConfigured,
   });
 });
 
