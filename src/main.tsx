@@ -303,6 +303,9 @@ function LoginScreen({ appName, onSuccess, onError }: {
             <button className="button google-button full" type="button" onClick={() => window.location.assign('/api/auth/google/start')}>
               <GoogleIcon /> Continue with Google
             </button>
+            <button className="google-signup-link" type="button" onClick={() => window.location.assign('/api/auth/google/start?mode=signup')}>
+              New user? Sign up with Google
+            </button>
             <div className="auth-divider"><span>or</span></div>
           </>
         )}
