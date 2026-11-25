@@ -50,6 +50,7 @@ type Screen =
 function App() {
   const [screen, setScreen] = useState<Screen>({ type: 'loading' });
   const [notice, setNotice] = useState<string | null>(null);
+  const [googleRecoveryEmail, setGoogleRecoveryEmail] = useState<string | null>(null);
 
   const boot = useCallback(async () => {
     setScreen({ type: 'loading' });
@@ -78,6 +79,8 @@ function App() {
   useEffect(() => { void boot(); }, [boot]);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    const missingEmail = params.get('oauth_missing');
+    if (missingEmail) setGoogleRecoveryEmail(missingEmail);
     const message = params.get('oauth') ?? params.get('oauth_error');
     if (message) {
       setNotice(message);
@@ -100,6 +103,7 @@ function App() {
       {screen.type === 'login' && (
         <LoginScreen
           appName={screen.status.config?.appName ?? 'Passkey Lab'}
+          recoveryEmail={googleRecoveryEmail}
           onSuccess={() => void boot()}
           onError={(message) => setNotice(message)}
         />
@@ -248,8 +252,9 @@ function SetupWizard({ status, onComplete, onError }: {
   );
 }
 
-function LoginScreen({ appName, onSuccess, onError }: {
+function LoginScreen({ appName, recoveryEmail, onSuccess, onError }: {
   appName: string;
+  recoveryEmail?: string | null;
   onSuccess: () => void;
   onError: (message: string) => void;
 }) {
@@ -264,6 +269,10 @@ function LoginScreen({ appName, onSuccess, onError }: {
       .then((providers) => setGoogleAvailable(providers.google))
       .catch(() => setGoogleAvailable(false));
   }, []);
+
+  if (recoveryEmail) {
+    return <GoogleRecoveryScreen email={recoveryEmail} />;
+  }
 
   async function login(event: FormEvent) {
     event.preventDefault();
@@ -327,6 +336,35 @@ function LoginScreen({ appName, onSuccess, onError }: {
         </button>
         {mode === 'passkey' && <p className="tiny centered">Your device may ask for your fingerprint, face or PIN.</p>}
       </form>
+    </main>
+  );
+}
+
+function GoogleRecoveryScreen({ email }: { email: string }) {
+  return (
+    <main className="login-page page-padding">
+      <div className="login-hero">
+        <Brand name="Passkey Lab" />
+        <p>Secure sign-in without sharing a secret.</p>
+      </div>
+      <section className="card recovery-card">
+        <div className="recovery-icon"><Icon name="database" /></div>
+        <h1>No account found</h1>
+        <p className="lead">We checked this Google account:</p>
+        <div className="google-account-row"><GoogleIcon /><strong>{email}</strong></div>
+        <p className="recovery-explanation">There isn’t a Passkey Lab account for this email yet.</p>
+        <button className="button primary full" type="button" onClick={() => window.location.assign('/api/auth/google/start?mode=signup')}>
+          <GoogleIcon /> Create account with Google
+        </button>
+        <p className="tiny centered">Creates a standard user account. No password required.</p>
+        <button className="button recovery-secondary full" type="button" onClick={() => window.location.assign('/api/auth/google/start')}>
+          Use a different Google account
+        </button>
+        <button className="recovery-back" type="button" onClick={() => window.location.assign('/')}>
+          Back to sign in
+        </button>
+        <div className="privacy-note"><Icon name="shield" /><span>Google only shares your verified email and basic profile.</span></div>
+      </section>
     </main>
   );
 }
