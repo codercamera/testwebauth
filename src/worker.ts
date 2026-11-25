@@ -11,11 +11,14 @@ import type {
   Base64URLString,
   RegistrationResponseJSON,
 } from '@simplewebauthn/server';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 type Bindings = {
   DB?: D1Database;
   ASSETS: Fetcher;
   SETUP_KEY?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
 };
 
 type Variables = {
@@ -53,11 +56,55 @@ type AppConfig = {
   passwordEnabled: boolean;
 };
 
+type OAuthAccountRow = {
+  id: string;
+  user_id: string;
+  provider: string;
+  provider_subject: string;
+  email: string;
+  display_name: string | null;
+  picture_url: string | null;
+  created_at: string;
+  last_login_at: string | null;
+};
+
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 const SESSION_COOKIE = 'passkey_lab_session';
-const SCHEMA_VERSION = '1';
+const OAUTH_COOKIE = 'passkey_lab_oauth';
+const SCHEMA_VERSION = '2';
 const CHALLENGE_TTL_MINUTES = 5;
 const SESSION_TTL_DAYS = 7;
+const OAUTH_TTL_MINUTES = 10;
+const googleJwks = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
+
+const oauthSchemaStatements = [
+  `CREATE TABLE IF NOT EXISTS oauth_accounts (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    provider_subject TEXT NOT NULL,
+    email TEXT NOT NULL,
+    display_name TEXT,
+    picture_url TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_login_at TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE (provider, provider_subject),
+    UNIQUE (user_id, provider)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_oauth_accounts_user ON oauth_accounts(user_id)`,
+  `CREATE TABLE IF NOT EXISTS oauth_states (
+    state_hash TEXT PRIMARY KEY,
+    browser_token_hash TEXT NOT NULL,
+    nonce TEXT NOT NULL,
+    code_verifier TEXT NOT NULL,
+    link_user_id TEXT,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (link_user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_oauth_states_expiry ON oauth_states(expires_at)`,
+];
 
 const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS app_meta (
@@ -119,6 +166,7 @@ const schemaStatements = [
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
   )`,
+  ...oauthSchemaStatements,
 ];
 
 app.use('/api/*', async (c, next) => {
@@ -133,6 +181,9 @@ app.use('/api/*', async (c, next) => {
 
 app.use('/api/auth/*', async (c, next) => {
   const publicRoutes = [
+    '/api/auth/providers',
+    '/api/auth/google/start',
+    '/api/auth/google/callback',
     '/api/auth/login/password',
     '/api/auth/login/passkey/options',
     '/api/auth/login/passkey/verify',
@@ -161,6 +212,8 @@ app.get('/api/setup/status', async (c) => {
   if (!exists) {
     return c.json({ state: 'empty', setupKeyConfigured: Boolean(c.env.SETUP_KEY) });
   }
+
+  await ensureOAuthSchema(c.env.DB);
 
   const config = await readConfig(c.env.DB);
   const admin = await c.env.DB.prepare(
@@ -291,6 +344,211 @@ app.post('/api/setup/passkey/verify', async (c) => {
   await recordEvent(c, db, user.id, 'passkey_registered', true, 'Initial setup passkey');
   const token = await createSession(db, user.id);
   writeSessionCookie(c, token);
+  return c.json({ ok: true });
+});
+
+app.get('/api/auth/providers', (c) => {
+  return c.json({
+    google: Boolean(c.env.GOOGLE_CLIENT_ID && c.env.GOOGLE_CLIENT_SECRET),
+  });
+});
+
+app.get('/api/auth/google/start', async (c) => {
+  const db = requireDatabase(c.env.DB);
+  await assertReady(db);
+  await ensureOAuthSchema(db);
+  const google = requireGoogleConfig(c.env);
+  const linkMode = c.req.query('mode') === 'link';
+  const linkUser = linkMode ? await authenticatedUser(c, db) : null;
+  if (linkMode && !linkUser) {
+    return c.redirect(oauthResultUrl(c.req.url, 'oauth_error', 'Sign in before connecting Google.'));
+  }
+
+  const state = randomToken(32);
+  const browserToken = randomToken(32);
+  const nonce = randomToken(32);
+  const codeVerifier = randomToken(64);
+  const redirectUri = googleRedirectUri(c.req.url);
+
+  await db.prepare('DELETE FROM oauth_states WHERE expires_at <= CURRENT_TIMESTAMP').run();
+  await db.prepare(
+    `INSERT INTO oauth_states
+      (state_hash, browser_token_hash, nonce, code_verifier, link_user_id, expires_at)
+     VALUES (?, ?, ?, ?, ?, datetime('now', ?))`,
+  ).bind(
+    await sha256(state),
+    await sha256(browserToken),
+    nonce,
+    codeVerifier,
+    linkUser?.id ?? null,
+    `+${OAUTH_TTL_MINUTES} minutes`,
+  ).run();
+
+  setCookie(c, OAUTH_COOKIE, browserToken, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Lax',
+    path: '/api/auth/google',
+    maxAge: OAUTH_TTL_MINUTES * 60,
+  });
+
+  const authorizationUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  authorizationUrl.search = new URLSearchParams({
+    client_id: google.clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: 'openid email profile',
+    state,
+    nonce,
+    code_challenge: await sha256(codeVerifier),
+    code_challenge_method: 'S256',
+    prompt: 'select_account',
+  }).toString();
+  return c.redirect(authorizationUrl.toString());
+});
+
+app.get('/api/auth/google/callback', async (c) => {
+  const db = requireDatabase(c.env.DB);
+  await assertReady(db);
+  await ensureOAuthSchema(db);
+  const google = requireGoogleConfig(c.env);
+  const providerError = c.req.query('error');
+  if (providerError) {
+    clearOAuthCookie(c);
+    return c.redirect(oauthResultUrl(c.req.url, 'oauth_error', 'Google sign-in was cancelled.'));
+  }
+
+  const state = c.req.query('state');
+  const code = c.req.query('code');
+  const browserToken = getCookie(c, OAUTH_COOKIE);
+  if (!state || !code || !browserToken) {
+    clearOAuthCookie(c);
+    return c.redirect(oauthResultUrl(c.req.url, 'oauth_error', 'Google sign-in request expired.'));
+  }
+
+  try {
+    const oauthState = await consumeOAuthState(db, state, browserToken);
+    const redirectUri = googleRedirectUri(c.req.url);
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: google.clientId,
+        client_secret: google.clientSecret,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+        code_verifier: oauthState.code_verifier,
+      }),
+    });
+    const tokens = await tokenResponse.json() as { id_token?: string; error_description?: string };
+    if (!tokenResponse.ok || !tokens.id_token) {
+      throw new ApiError(401, tokens.error_description || 'Google rejected the authorization code.');
+    }
+
+    const verification = await jwtVerify(tokens.id_token, googleJwks, {
+      issuer: ['https://accounts.google.com', 'accounts.google.com'],
+      audience: google.clientId,
+    });
+    const claims = verification.payload;
+    if (claims.nonce !== oauthState.nonce) throw new ApiError(401, 'Google nonce verification failed.');
+    if (typeof claims.sub !== 'string' || typeof claims.email !== 'string' || claims.email_verified !== true) {
+      throw new ApiError(401, 'Google did not return a verified email address.');
+    }
+
+    const googleEmail = claims.email.toLowerCase();
+    let user: UserRow;
+    let resultMessage = 'Signed in with Google.';
+    if (oauthState.link_user_id) {
+      user = await findUserById(db, oauthState.link_user_id);
+      if (user.email.toLowerCase() !== googleEmail) {
+        throw new ApiError(409, 'Connect the Google account that uses the same email as your application account.');
+      }
+      await linkGoogleAccount(db, user.id, {
+        subject: claims.sub,
+        email: googleEmail,
+        name: typeof claims.name === 'string' ? claims.name : null,
+        picture: typeof claims.picture === 'string' ? claims.picture : null,
+      });
+      await recordEvent(c, db, user.id, 'google_linked', true, googleEmail);
+      resultMessage = 'Google account connected.';
+    } else {
+      const linked = await db.prepare(
+        `SELECT u.id, u.email, u.display_name, u.role, u.password_hash, u.created_at
+         FROM oauth_accounts o JOIN users u ON u.id = o.user_id
+         WHERE o.provider = 'google' AND o.provider_subject = ?`,
+      ).bind(claims.sub).first<UserRow>();
+      if (linked) {
+        user = linked;
+      } else {
+        const existing = await db.prepare(
+          `SELECT id, email, display_name, role, password_hash, created_at
+           FROM users WHERE email = ?`,
+        ).bind(googleEmail).first<UserRow>();
+        if (!existing) {
+          throw new ApiError(403, 'No existing Passkey Lab account matches this Google email.');
+        }
+        user = existing;
+        await linkGoogleAccount(db, user.id, {
+          subject: claims.sub,
+          email: googleEmail,
+          name: typeof claims.name === 'string' ? claims.name : null,
+          picture: typeof claims.picture === 'string' ? claims.picture : null,
+        });
+      }
+      await recordEvent(c, db, user.id, 'google_login', true, googleEmail);
+    }
+
+    await db.prepare(
+      `UPDATE oauth_accounts SET last_login_at = CURRENT_TIMESTAMP
+       WHERE provider = 'google' AND provider_subject = ?`,
+    ).bind(claims.sub).run();
+    const sessionToken = await createSession(db, user.id);
+    writeSessionCookie(c, sessionToken);
+    clearOAuthCookie(c);
+    return c.redirect(oauthResultUrl(c.req.url, 'oauth', resultMessage));
+  } catch (error) {
+    clearOAuthCookie(c);
+    const message = error instanceof Error ? error.message : 'Google sign-in failed.';
+    return c.redirect(oauthResultUrl(c.req.url, 'oauth_error', message));
+  }
+});
+
+app.get('/api/auth/google/account', async (c) => {
+  const db = requireDatabase(c.env.DB);
+  await ensureOAuthSchema(db);
+  const account = await db.prepare(
+    `SELECT id, user_id, provider, provider_subject, email, display_name, picture_url,
+            created_at, last_login_at
+     FROM oauth_accounts WHERE user_id = ? AND provider = 'google'`,
+  ).bind(c.get('user').id).first<OAuthAccountRow>();
+  return c.json({
+    configured: Boolean(c.env.GOOGLE_CLIENT_ID && c.env.GOOGLE_CLIENT_SECRET),
+    account: account ? {
+      email: account.email,
+      displayName: account.display_name,
+      pictureUrl: account.picture_url,
+      connectedAt: account.created_at,
+      lastLoginAt: account.last_login_at,
+    } : null,
+  });
+});
+
+app.delete('/api/auth/google/account', async (c) => {
+  const db = requireDatabase(c.env.DB);
+  await ensureOAuthSchema(db);
+  const user = c.get('user');
+  const passkeys = await db.prepare(
+    'SELECT COUNT(*) AS total FROM webauthn_credentials WHERE user_id = ?',
+  ).bind(user.id).first<{ total: number }>();
+  if (!user.password_hash && (passkeys?.total ?? 0) === 0) {
+    return c.json({ error: 'Add a password or passkey before disconnecting your only sign-in method.' }, 409);
+  }
+  const result = await db.prepare(
+    `DELETE FROM oauth_accounts WHERE user_id = ? AND provider = 'google'`,
+  ).bind(user.id).run();
+  if (!result.meta.changes) return c.json({ error: 'Google account is not connected.' }, 404);
+  await recordEvent(c, db, user.id, 'google_unlinked', true);
   return c.json({ ok: true });
 });
 
@@ -500,6 +758,99 @@ function requireDatabase(db?: D1Database): D1Database {
   return db;
 }
 
+function requireGoogleConfig(env: Bindings): { clientId: string; clientSecret: string } {
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
+    throw new ApiError(503, 'Google authentication is not configured on the Worker.');
+  }
+  return { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET };
+}
+
+async function ensureOAuthSchema(db: D1Database): Promise<void> {
+  await db.batch(oauthSchemaStatements.map((sql) => db.prepare(sql)));
+  await db.prepare(
+    `UPDATE app_meta SET value = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE key = 'schema_version' AND CAST(value AS INTEGER) < ?`,
+  ).bind(SCHEMA_VERSION, Number(SCHEMA_VERSION)).run();
+}
+
+function googleRedirectUri(requestUrl: string): string {
+  return new URL('/api/auth/google/callback', requestUrl).toString();
+}
+
+function oauthResultUrl(requestUrl: string, key: 'oauth' | 'oauth_error', message: string): string {
+  const url = new URL('/', requestUrl);
+  url.searchParams.set(key, message);
+  return url.toString();
+}
+
+function clearOAuthCookie(c: Parameters<typeof deleteCookie>[0]): void {
+  deleteCookie(c, OAUTH_COOKIE, { path: '/api/auth/google' });
+}
+
+function randomToken(length: number): string {
+  return bytesToBase64url(crypto.getRandomValues(new Uint8Array(length)));
+}
+
+async function consumeOAuthState(
+  db: D1Database,
+  state: string,
+  browserToken: string,
+): Promise<{ nonce: string; code_verifier: string; link_user_id: string | null }> {
+  const stateHash = await sha256(state);
+  const row = await db.prepare(
+    `SELECT browser_token_hash, nonce, code_verifier, link_user_id
+     FROM oauth_states WHERE state_hash = ? AND expires_at > CURRENT_TIMESTAMP`,
+  ).bind(stateHash).first<{
+    browser_token_hash: string;
+    nonce: string;
+    code_verifier: string;
+    link_user_id: string | null;
+  }>();
+  await db.prepare('DELETE FROM oauth_states WHERE state_hash = ?').bind(stateHash).run();
+  if (!row || !(await safeEqual(row.browser_token_hash, await sha256(browserToken)))) {
+    throw new ApiError(401, 'Google sign-in state verification failed or expired.');
+  }
+  return row;
+}
+
+async function linkGoogleAccount(
+  db: D1Database,
+  userId: string,
+  google: { subject: string; email: string; name: string | null; picture: string | null },
+): Promise<void> {
+  const subjectAccount = await db.prepare(
+    `SELECT id, user_id, provider, provider_subject, email, display_name, picture_url,
+            created_at, last_login_at
+     FROM oauth_accounts WHERE provider = 'google' AND provider_subject = ?`,
+  ).bind(google.subject).first<OAuthAccountRow>();
+  if (subjectAccount && subjectAccount.user_id !== userId) {
+    throw new ApiError(409, 'This Google account is already connected to another user.');
+  }
+
+  const userAccount = await db.prepare(
+    `SELECT id, user_id, provider, provider_subject, email, display_name, picture_url,
+            created_at, last_login_at
+     FROM oauth_accounts WHERE provider = 'google' AND user_id = ?`,
+  ).bind(userId).first<OAuthAccountRow>();
+  if (userAccount && userAccount.provider_subject !== google.subject) {
+    throw new ApiError(409, 'Disconnect the current Google account before connecting another one.');
+  }
+
+  if (subjectAccount || userAccount) {
+    await db.prepare(
+      `UPDATE oauth_accounts SET email = ?, display_name = ?, picture_url = ?
+       WHERE user_id = ? AND provider = 'google'`,
+    ).bind(google.email, google.name, google.picture, userId).run();
+    return;
+  }
+
+  await db.prepare(
+    `INSERT INTO oauth_accounts
+      (id, user_id, provider, provider_subject, email, display_name, picture_url)
+     VALUES (?, ?, 'google', ?, ?, ?, ?)`,
+  ).bind(crypto.randomUUID(), userId, google.subject, google.email, google.name, google.picture).run();
+}
+
 async function readJson<T>(c: { req: { json: () => Promise<unknown> } }): Promise<T> {
   try {
     return (await c.req.json()) as T;
@@ -530,7 +881,7 @@ async function readConfig(db: D1Database): Promise<AppConfig> {
 
 async function assertReady(db: D1Database): Promise<void> {
   if (!(await tableExists(db, 'app_meta'))) throw new ApiError(409, 'Application setup is required.');
-  if (!(await readConfig(db)).installationComplete) throw new ApiError(409, 'Register the initial passkey to finish setup.');
+  if (!(await readConfig(db)).installationComplete) throw new ApiError(409, 'Finish the initial application setup.');
 }
 
 async function assertSetupKey(expected?: string, supplied?: string): Promise<void> {
