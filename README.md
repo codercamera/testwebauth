@@ -31,13 +31,11 @@ If setup is interrupted after table creation, reopening the application resumes 
 npm install
 ```
 
-### 2. Create D1
+### 2. Provision D1
 
-```sh
-npx wrangler d1 create testwebauth
-```
+The Wrangler configuration declares a D1 binding named `DB` without a fixed database ID. On the first Cloudflare deployment, Wrangler automatically provisions the D1 database and attaches it to the Worker. Its generated database ID is available in the Cloudflare dashboard after deployment and does not need to be committed to GitHub.
 
-Copy the returned database ID into `wrangler.jsonc`, replacing `REPLACE_WITH_YOUR_D1_DATABASE_ID`.
+If you want to use an existing D1 database instead, replace the binding-only entry in `wrangler.jsonc` with its `database_name` and `database_id`.
 
 ### 3. Create the setup secret in Cloudflare
 
