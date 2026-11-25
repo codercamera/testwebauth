@@ -60,6 +60,18 @@ h2 { letter-spacing: -.025em; }
 .google-signup-link { width: 100%; border: 0; background: transparent; color: var(--primary-dark); padding: .8rem .5rem 0; font-weight: 800; font-size: .84rem; }
 .google-signup-link:hover { text-decoration: underline; }
 .google-icon { width: 1.25rem; height: 1.25rem; flex: 0 0 auto; }
+.recovery-card { padding: 1.4rem; text-align: center; }
+.recovery-icon { width: 4rem; height: 4rem; display: grid; place-items: center; color: var(--primary); background: var(--primary-soft); border-radius: 1.25rem; margin: 0 auto 1.15rem; }
+.recovery-icon svg { width: 2rem; height: 2rem; }
+.recovery-card h1 { margin-bottom: .55rem; }
+.google-account-row { display: flex; align-items: center; gap: .7rem; text-align: left; border: 1px solid var(--border); background: #f7f8fc; border-radius: .9rem; padding: .85rem .95rem; margin: 1rem 0; }
+.google-account-row strong { min-width: 0; overflow-wrap: anywhere; font-size: .9rem; }
+.recovery-explanation { color: #4d5870; line-height: 1.55; margin: 1.1rem 0 1.2rem; }
+.recovery-secondary { color: #202943; background: white; border: 1px solid #8791a9; margin-top: 1rem; }
+.recovery-secondary:hover { background: #fafbff; }
+.recovery-back { border: 0; background: transparent; color: var(--primary-dark); font-weight: 800; padding: .9rem .5rem .1rem; }
+.recovery-back:hover { text-decoration: underline; }
+.recovery-card .privacy-note { text-align: left; margin: 1.3rem 0 0; }
 .button.small { min-height: 2.35rem; padding: .45rem .75rem; border-radius: .72rem; font-size: .82rem; }
 .button.danger-text { color: var(--danger); background: #fff; border: 1px solid #f0d9dc; }
 .full { width: 100%; }
